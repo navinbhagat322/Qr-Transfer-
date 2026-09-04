@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Bootstrap QR Sender</title>
+<style>
+  body { font-family: sans-serif; text-align: center; background: #222; color: #eee; }
+  #grid { image-rendering: pixelated; margin: 10px auto; display: block; background: #fff; }
+  #info { font-size: 18px; margin: 10px; }
+  button, input { font-size: 16px; margin: 6px; }
+</style>
+</head>
+<body>
+<h2>Bootstrap Grid Sender</h2>
+<p>Pick a file, then click Start. Point the laptop camera at the screen and
+photograph each frame (save each shot as a .ppm on the laptop using
+whatever the laptop's camera app already gives you, or convert on the phone
+before saving). GRID and header layout below must match bootstrap_decoder.py exactly.</p>
+<input type="file" id="fileInput">
+<br>
+<button id="startBtn">Start</button>
+<button id="stopBtn">Stop</button>
+<input type="number" id="interval" value="1500" style="width:70px"> ms per frame
+<div id="info">no file loaded</div>
+<canvas id="grid" width="512" height="512"></canvas>
+
+<script>
+// Must match bootstrap_decoder.py:
+const GRID = 32;          // cells per side including border ring
+const INNER = GRID - 2;   // data cells per side
+const HEADER_BITS = 48;
+const PAYLOAD_BYTES = Math.floor((INNER * INNER - HEADER_BITS) / 8); // bytes per frame
+const CELL_PX = 512 / GRID;
+
+let frames = [];   // array of Uint8Array payloads
+let timer = null;
+let frameIdx = 0;
+
+const canvas = document.getElementById('grid');
+const ctx = canvas.getContext('2d');
+const info = document.getElementById('info');
+
+document.getElementById('fileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const buf = new Uint8Array(await file.arrayBuffer());
+  frames = [];
+  for (let off = 0; off < buf.length; off += PAYLOAD_BYTES) {
+    frames.push(buf.slice(off, off + PAYLOAD_BYTES));
+  }
+  frameIdx = 0;
+  info.textContent = file.name + ': ' + buf.length + ' bytes -> ' + frames.length + ' frames';
+});
+
+function intToBits(value, nbits, out) {
+  for (let i = nbits - 1; i >= 0; i--) out.push((value >> i) & 1);
+}
+
+function buildBits(idx, total, payload) {
+  const bits = [];
+  intToBits(idx, 16, bits);
+  intToBits(total, 16, bits);
+  intToBits(payload.length, 8, bits);
+  let checksum = 0;
+  for (const b of payload) checksum = (checksum + b) & 0xff;
+  intToBits(checksum, 8, bits);
+  for (const b of payload) intToBits(b, 8, bits);
+  while (bits.length < INNER * INNER) bits.push(0); // pad unused tail cells white
+  return bits;
+}
+
+function drawFrame(idx) {
+  const payload = frames[idx];
+  const bits = buildBits(idx, frames.length, payload);
+
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height); // border ring, whole canvas first
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(CELL_PX, CELL_PX, canvas.width - 2 * CELL_PX, canvas.height - 2 * CELL_PX);
+
+  for (let i = 0; i < bits.length; i++) {
+    if (bits[i] === 0) continue; // white already painted
+    const row = 1 + Math.floor(i / INNER);
+    const col = 1 + (i % INNER);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(col * CELL_PX, row * CELL_PX, CELL_PX, CELL_PX);
+  }
+
+  info.textContent = 'frame ' + (idx + 1) + ' / ' + frames.length +
+    ' (' + payload.length + ' bytes)';
+}
+
+document.getElementById('startBtn').addEventListener('click', () => {
+  if (frames.length === 0) { alert('choose a file first'); return; }
+  if (timer) clearInterval(timer);
+  frameIdx = 0;
+  const ms = parseInt(document.getElementById('interval').value, 10) || 1500;
+  drawFrame(frameIdx);
+  timer = setInterval(() => {
+    frameIdx = (frameIdx + 1) % frames.length;
+    drawFrame(frameIdx);
+  }, ms);
+});
+
+document.getElementById('stopBtn').addEventListener('click', () => {
+  if (timer) { clearInterval(timer); timer = null; }
+});
+</script>
+</body>
+</html>
